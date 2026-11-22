@@ -87,7 +87,7 @@ const pv = JSON.parse(B.getSupportPreview()).details;
 check('details preview has version and sync status', pv.includes(ver(NEW)) && /Bank connected: yes/.test(pv));
 check('no dollar amounts in the details', !/\$\s?\d/.test(pv));
 const r = B.sendSupport('My Chase card stopped updating on Tuesday', true); const sm = mails[mails.length - 1];
-check('email goes to Tomisin, reply-to the friend', sm.to === 'tomisinaaina+financehq@gmail.com' && sm.replyTo === 'me@x.com', sm.subject);
+check('email goes to Tomisin, reply-to the friend', sm.to === 'financehq.app@gmail.com' && sm.replyTo === 'me@x.com', sm.subject);
 check('email has message + details, no amounts', /Chase card stopped/.test(sm.body) && /TECHNICAL DETAILS/.test(sm.body) && !/\$\s?\d/.test(sm.body));
 const r2 = B.sendSupport('Second issue here', false);
 check('box unticked → message only', !/TECHNICAL DETAILS/.test(mails[mails.length - 1].body));

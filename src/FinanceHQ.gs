@@ -3362,7 +3362,7 @@ function refreshAfterPhoneEdit() { liveRebuild_('Transactions'); return true; }
 // account names or store names. Turn it off in Settings: "Share usage check-ins with the Finance HQ creator (Yes/No)".
 // The creator fills CHECKIN below once (run setupTesterTracker in their own copy). Blank = check-ins are off for everyone.
 const CHECKIN = {"url":"https://docs.google.com/forms/d/e/1FAIpQLScXchq1zCkaQV7h3XxZPVmPBdjLkJYV6mmv5V_pirhoTTw-Hw/formResponse","ids":{"tester":"entry.344453892","week":"entry.1595464086","synced":"entry.199959467","accounts":"entry.329170921","newTx":"entry.249597811","appDays":"entry.728590027","sheetDays":"entry.1864243060","catFixes":"entry.166478788","ticks":"entry.2128658648","limitEdits":"entry.558089935","setupDone":"entry.1823756908","savingsGoal":"entry.729450541","yearly":"entry.1270006795","problems":"entry.1275410742","version":"entry.1893017258"}};
-const FHQ_VERSION = '2026.11.22.4';
+const FHQ_VERSION = '2026.11.22.5';
 const CHECKIN_FIELDS = [
   ['tester', 'Tester (Google account)'], ['week', 'Week since install'], ['synced', 'Bank synced in last 2 days'],
   ['accounts', 'Accounts linked'], ['newTx', 'New transactions this week'], ['appDays', 'Days phone app opened (7d)'],
@@ -3616,7 +3616,7 @@ function sendFeedback() {
 // ===== PART 13b — Get help: message the person who shared Finance HQ, from inside the sheet =====
 // Sends from the user's own Gmail, so replies come straight back to them. Technical details are optional and shown
 // in full before sending: version, sync status, which health checks need attention, recent errors — dollar amounts removed.
-const SUPPORT = { email: 'tomisinaaina+financehq@gmail.com', name: 'Tomisin' };
+const SUPPORT = { email: 'financehq.app@gmail.com', name: 'Tomisin' };
 
 function redact_(t) {                                 // strip money, long numbers and emails from anything we send
   return String(t).replace(/-?\$\s?[\d,]+(\.\d+)?/g, '$…').replace(/\b\d{4,}\b/g, '…').replace(/[\w.+-]+@[\w-]+\.[\w.]+/g, '(email)');
