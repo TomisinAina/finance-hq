@@ -1799,6 +1799,9 @@ function weeklyDigest(force) {
   const tx = loadTx_(), tz = Session.getScriptTimeZone(), now = new Date();
   const cur = currentPeriod_(now), st = periodStats_(cur, tx), b = periodBounds_(cur);
   const daysLeft = Math.max(1, Math.round((b[1] - new Date(now.getFullYear(), now.getMonth(), now.getDate())) / 864e5) + 1);
+  const coming = payStillComing_(tx, cur), cl = checklist_(tx, S, cur, st.pay + coming.amt), billsDue = billsComing_(tx, cur, S);
+  const left = cl.pay > 0 ? cl.pay - cl.setAside - billsDue.amt - st.spend : null;   // same Left to spend as the Dashboard
+  const leftTxt = left === null ? 'No pay yet' : fmt$_(left) + ' left to spend';
   const weekAgo = new Date(now.getTime() - 7 * 864e5);
   const weekSpend = -tx.filter(t => t.date >= weekAgo && isSpend_(t)).reduce((s, t) => s + t.amt, 0);
   const cards = cardsP3_(tx, S), f = forecast_(tx, S, cards, 45);
@@ -1812,15 +1815,15 @@ function weeklyDigest(force) {
   const unc = st.tx.filter(t => t.cat === 'Uncategorized' && t.amt < 0);
   const html = '<div style="font-family:Arial,sans-serif;font-size:14px;color:#111827;max-width:560px">' +
     '<h2 style="margin:0">Your week in money</h2><p style="color:#6B7280;margin-top:4px">Period ' + periodRange_(cur) + '</p>' +
-    '<p style="font-size:28px;margin:8px 0;color:' + (st.left >= 0 ? '#059669' : '#DC2626') + '"><b>' + fmt$_(st.left) + '</b> left</p>' +
-    '<p>' + (daysLeft === 1 ? 'Last day of this period' : daysLeft + ' days to go') + (st.left > 0 ? ' · about <b>' + fmt$_(st.left / daysLeft) + '/day</b>' : '') + ' · spent ' + fmt$_(weekSpend) + ' this week</p>' +
+    '<p style="font-size:28px;margin:8px 0;color:' + (left === null || left >= 0 ? '#059669' : '#DC2626') + '"><b>' + (left === null ? fmt$_(st.spend) + '</b> spent so far</p>' : fmt$_(left) + '</b> left to spend</p>') +
+    '<p>' + (daysLeft === 1 ? 'Last day of this period' : daysLeft + ' days to go') + (left > 0 ? ' · about <b>' + fmt$_(left / daysLeft) + '/day</b>' : '') + ' · spent ' + fmt$_(weekSpend) + ' this week</p>' +
     '<h3>Top categories this period</h3><table>' + cats + '</table>' +
     '<h3>Bills</h3><ul>' + bills + '</ul>' +
     '<h3>Checking forecast</h3><p>Lowest point in the next 45 days: <b style="color:' + (f.low.bal < (Number(S['Checking low point alert under ($)']) || 500) ? '#DC2626' : '#059669') + '">' + fmt$_(f.low.bal) + '</b> on ' + Utilities.formatDate(f.low.date, tz, 'EEE MMM d') + '</p>' +
     (week ? '<h3>Alerts this week</h3><ul>' + week + '</ul>' : '') +
     (unc.length ? '<p style="color:#6B7280">' + unc.length + ' uncategorized purchases (' + fmt$_(-unc.reduce((s, t) => s + t.amt, 0)) + ') — add Rules so they land in the right place.</p>' : '') +
     '<p style="color:#6B7280"><a href="' + finSS_().getUrl() + '">Open Finance HQ</a></p></div>';
-  mail_({ to: alertEmail_(), subject: 'Finance HQ weekly: ' + fmt$_(st.left) + ' left, ' + (daysLeft === 1 ? 'last day of the period' : daysLeft + ' days to go'), htmlBody: html });
+  mail_({ to: alertEmail_(), subject: 'Finance HQ weekly: ' + leftTxt + ', ' + (daysLeft === 1 ? 'last day of the period' : daysLeft + ' days to go'), htmlBody: html });
 }
 
 // ---------------------------------------------------------------- monthly insights (used by Archive)
@@ -3364,7 +3367,7 @@ function refreshAfterPhoneEdit() { liveRebuild_('Transactions'); return true; }
 // account names or store names. Turn it off in Settings: "Share usage check-ins with the Finance HQ creator (Yes/No)".
 // The creator fills CHECKIN below once (run setupTesterTracker in their own copy). Blank = check-ins are off for everyone.
 const CHECKIN = {"url":"https://docs.google.com/forms/d/e/1FAIpQLScXchq1zCkaQV7h3XxZPVmPBdjLkJYV6mmv5V_pirhoTTw-Hw/formResponse","ids":{"tester":"entry.344453892","week":"entry.1595464086","synced":"entry.199959467","accounts":"entry.329170921","newTx":"entry.249597811","appDays":"entry.728590027","sheetDays":"entry.1864243060","catFixes":"entry.166478788","ticks":"entry.2128658648","limitEdits":"entry.558089935","setupDone":"entry.1823756908","savingsGoal":"entry.729450541","yearly":"entry.1270006795","problems":"entry.1275410742","version":"entry.1893017258"}};
-const FHQ_VERSION = '2026.11.22.7';
+const FHQ_VERSION = '2026.11.22.8';
 const CHECKIN_FIELDS = [
   ['tester', 'Tester (Google account)'], ['week', 'Week since install'], ['synced', 'Bank synced in last 2 days'],
   ['accounts', 'Accounts linked'], ['newTx', 'New transactions this week'], ['appDays', 'Days phone app opened (7d)'],
