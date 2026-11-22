@@ -1499,6 +1499,49 @@ function billsComing_(tx, key, S) {
   return { amt: Math.round(list.reduce((s, x) => s + x.amt, 0) * 100) / 100, list: list };
 }
 // Paychecks still expected before this period ends (any account), from your usual payday rhythm and amount.
+// ---- no regular paycheck (students, family support, between jobs)
+// Quick setup sets "Money comes from" = No paycheck, then a plan: a set amount each month, or make my money last until a date.
+function noPay_(S) { return /^no/i.test(String((S || settings_())['Money comes from'] || '').trim()); }
+function planLast_(S) { return /last/i.test(String(S['Spending plan'] || '')); }
+function lastUntil_(S) {
+  const v = S['Make my money last until'];
+  const d = v instanceof Date ? v : parseDay_(String(v || '').slice(0, 10));
+  return d && !isNaN(d) ? new Date(d.getFullYear(), d.getMonth(), d.getDate()) : null;
+}
+function liquid_(S) {                         // checking + savings − card balances owed − money held for others
+  const a = sheet_('Accounts');
+  const rows = a.getLastRow() > 1 ? a.getRange(2, 1, a.getLastRow() - 1, 5).getValues() : [];
+  return rows.reduce((s, r) => s + (r[3] === 'Checking' || r[3] === 'Savings' ? (Number(r[4]) || 0) : r[3] === 'Credit card' ? -Math.abs(Number(r[4]) || 0) : 0), 0)
+    - (Number(S['Cash held for others']) || 0);
+}
+// What this period can spend with no paycheck. Make-it-last: this period's fair share of the money you have now.
+function allowance_(key, tx, S, st) {
+  if (planLast_(S)) {
+    const until = lastUntil_(S), now = new Date(), today = new Date(now.getFullYear(), now.getMonth(), now.getDate()), pb = periodBounds_(key);
+    if (!until || until < today || pb[1] < today) return 0;
+    const daysP = Math.round((pb[1] - today) / 864e5) + 1, daysT = Math.round((until - today) / 864e5) + 1;
+    const share = Math.max(0, liquid_(S)) * Math.min(1, daysP / daysT);
+    return Math.round(((st ? st.spend : 0) + share) * 100) / 100;     // spent so far is already out of your balance
+  }
+  return Math.max(0, Number(S['Spending money per month ($)']) || 0);
+}
+// How long your money lasts at your recent spending pace.
+function runway_(tx, S) {
+  const now = new Date(), today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const since = new Date(today.getTime() - 60 * 864e5);
+  const first = tx.length ? tx.reduce((a, t) => t.date < a ? t.date : a, tx[0].date) : today;
+  const days = Math.max(14, Math.min(60, Math.round((today - (first > since ? first : since)) / 864e5)));
+  const spend = -tx.filter(t => t.date >= since && isSpend_(t) && !t.trip).reduce((s, t) => s + t.amt, 0);
+  const money = liquid_(S), perDay = spend / days;
+  if (!(perDay > 0.5)) return null;
+  const d = Math.max(0, money / perDay);
+  return { money: money, perMonth: perDay * 30.4, days: d, date: d > 1095 ? null : new Date(today.getTime() + d * 864e5) };
+}
+function planText_(S) {
+  const tz = Session.getScriptTimeZone(), u = lastUntil_(S);
+  return planLast_(S) ? (u ? 'make it last until ' + Utilities.formatDate(u, tz, 'MMM d') : 'pick an end date in Quick setup')
+    : Number(S['Spending money per month ($)']) > 0 ? fmt$_(Number(S['Spending money per month ($)'])) + ' a month' : 'set a spending plan in Quick setup';
+}
 function payStillComing_(tx, key) {
   const tz = Session.getScriptTimeZone(), now = new Date(), today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const end = periodBounds_(key)[1], days = {};
@@ -1801,7 +1844,8 @@ function weeklyDigest(force) {
   const daysLeft = Math.max(1, Math.round((b[1] - new Date(now.getFullYear(), now.getMonth(), now.getDate())) / 864e5) + 1);
   const coming = payStillComing_(tx, cur), cl = checklist_(tx, S, cur, st.pay + coming.amt), billsDue = billsComing_(tx, cur, S);
   const left = cl.pay > 0 ? cl.pay - cl.setAside - billsDue.amt - st.spend : null;   // same Left to spend as the Dashboard
-  const leftTxt = left === null ? 'No pay yet' : fmt$_(left) + ' left to spend';
+  const leftTxt = left === null ? (cl.noPay ? fmt$_(st.spend) + ' spent' : 'No pay yet') : fmt$_(left) + ' left to spend';
+  const rw = cl.noPay ? runway_(tx, S) : null;
   const weekAgo = new Date(now.getTime() - 7 * 864e5);
   const weekSpend = -tx.filter(t => t.date >= weekAgo && isSpend_(t)).reduce((s, t) => s + t.amt, 0);
   const cards = cardsP3_(tx, S), f = forecast_(tx, S, cards, 45);
@@ -1817,6 +1861,7 @@ function weeklyDigest(force) {
     '<h2 style="margin:0">Your week in money</h2><p style="color:#6B7280;margin-top:4px">Period ' + periodRange_(cur) + '</p>' +
     '<p style="font-size:28px;margin:8px 0;color:' + (left === null || left >= 0 ? '#059669' : '#DC2626') + '"><b>' + (left === null ? fmt$_(st.spend) + '</b> spent so far</p>' : fmt$_(left) + '</b> left to spend</p>') +
     '<p>' + (daysLeft === 1 ? 'Last day of this period' : daysLeft + ' days to go') + (left > 0 ? ' · about <b>' + fmt$_(left / daysLeft) + '/day</b>' : '') + ' · spent ' + fmt$_(weekSpend) + ' this week</p>' +
+    (rw ? '<p>At your recent pace (' + fmt$_(rw.perMonth) + '/month), your ' + fmt$_(rw.money) + ' lasts until <b>' + (rw.date ? Utilities.formatDate(rw.date, tz, 'MMM d, yyyy') : '3+ years from now') + '</b>.</p>' : '') +
     '<h3>Top categories this period</h3><table>' + cats + '</table>' +
     '<h3>Bills</h3><ul>' + bills + '</ul>' +
     '<h3>Checking forecast</h3><p>Lowest point in the next 45 days: <b style="color:' + (f.low.bal < (Number(S['Checking low point alert under ($)']) || 500) ? '#DC2626' : '#059669') + '">' + fmt$_(f.low.bal) + '</b> on ' + Utilities.formatDate(f.low.date, tz, 'EEE MMM d') + '</p>' +
@@ -1879,7 +1924,10 @@ function getAppData() {
     today: fmt(now), tx: rows, cards: cards, checking: Math.round(checking), coming: payStillComing_(tx, current), keepPct: setAsidePct_(S),
     plan: (() => { const comingP = payStillComing_(tx, curKey), c = checklist_(tx, S, curKey, periodStats_(curKey, tx).pay + comingP.amt);
       const bl = billsComing_(tx, curKey, S);
-      return { pay: c.pay, got: c.got, setAside: Math.round(c.setAside * 100) / 100, parts: c.parts, bills: bl.amt, billList: bl.list, goal: c.goalSave, pct: pctSetting_(S['Savings goal (% of pay)']), saved: c.moves.into, gross: c.moves.gross, out: c.moves.takenOut,
+      const rw = c.noPay ? runway_(tx, S) : null;
+      return { noPay: c.noPay, planText: c.noPay ? planText_(S) : '', last: c.noPay && planLast_(S), money: c.noPay ? Math.round(liquid_(S)) : 0,
+        runway: rw ? { perMonth: Math.round(rw.perMonth), date: rw.date ? Utilities.formatDate(rw.date, tz, 'MMM d, yyyy') : '3+ years', short: !!(planLast_(S) && lastUntil_(S) && rw.date && rw.date < lastUntil_(S)) } : null,
+        pay: c.pay, got: c.got, setAside: Math.round(c.setAside * 100) / 100, parts: c.parts, bills: bl.amt, billList: bl.list, goal: c.goalSave, pct: pctSetting_(S['Savings goal (% of pay)']), saved: c.moves.into, gross: c.moves.gross, out: c.moves.takenOut,
       items: c.items.map(i => ({ k: i.k, label: i.label, amt: Math.round(i.amt), note: i.note, left: Math.round(i.left), ticked: i.ticked, auto: i.auto })) }; })(),
     subs: (() => { const t = subsTracker_(); return { could: t.could, saved: t.saved, couldList: t.couldList.map(subName_), savedList: t.savedList.map(subName_) }; })(),
     limits: limits, cats: categoryList_(), demo: isDemo_(), fixedCats: FIXED_CATS.concat(NO_LIMIT_CATS)
@@ -1977,7 +2025,7 @@ function render(){
   var inc=mt.filter(function(t){return t.inc;}).reduce(function(s,t){return s+t.a;},0);
   var byCat={};mt.filter(function(t){return t.spend;}).forEach(function(t){byCat[t.c]=(byCat[t.c]||0)-t.a;});
   var cats=Object.keys(byCat).map(function(k){return [k,byCat[k]];}).filter(function(x){return x[1]>0.5;}).sort(function(a,b){return b[1]-a[1];});
-  var spent=Object.keys(byCat).reduce(function(s,k){return s+byCat[k];},0),coming=cur&&D.coming?D.coming.amt:0,kp=cur?(Number(D.keepPct)||0):0,payAll=cur?Math.max(inc,Number(D.plan&&D.plan.pay)||0):inc,keep=cur?(Number(D.plan&&D.plan.setAside)||payAll*kp):0,bills=cur?(Number(D.plan&&D.plan.bills)||0):0,left=payAll-keep-bills-spent,top=cats.filter(function(c){return (D.fixedCats||[]).indexOf(c[0])<0;}).slice(0,3),rest=Math.max(0,spent-top.reduce(function(s,x){return s+x[1];},0));
+  var spent=Object.keys(byCat).reduce(function(s,k){return s+byCat[k];},0),coming=cur&&D.coming?D.coming.amt:0,kp=cur?(Number(D.keepPct)||0):0,NP=!!(D.plan&&D.plan.noPay),payAll=cur?(NP?Number(D.plan.pay)||0:Math.max(inc,Number(D.plan&&D.plan.pay)||0)):inc,keep=cur?(NP?Number(D.plan.setAside)||0:Number(D.plan&&D.plan.setAside)||payAll*kp):0,bills=cur?(Number(D.plan&&D.plan.bills)||0):0,left=payAll-keep-bills-spent,top=cats.filter(function(c){return (D.fixedCats||[]).indexOf(c[0])<0;}).slice(0,3),rest=Math.max(0,spent-top.reduce(function(s,x){return s+x[1];},0));
   var h='';
   h+='<div class="top"><h1>Finance HQ'+(D.demo?' <span style="font-size:13px;font-weight:600;color:#F59E0B">DEMO</span>':'')+'</h1><div class="sub" style="text-align:right">'+(D.ranges[M]||'')+'</div></div>';
   h+='<div class="pills">'+MONTHS.slice(-6).map(function(m){return '<button class="pl'+(m===M?' on':'')+'" onclick="pick(\\''+m+'\\')">'+mName(m).split(' ')[0]+(m===D.current?' · now':'')+'</button>';}).join('')+'</div>';
@@ -1994,9 +2042,10 @@ function render(){
   h+='</div>';
 
   // Left this month
-  if(cur&&!(payAll>0)){h+='<div class="card"><div class="lbl">Spent so far '+(D.statement?'this period':'this month')+'</div><div class="big">'+$(spent)+'</div><div class="sub">No paycheck '+(inc>0?'':'found')+' this period yet. If a deposit is pay, set it to Income (tap it in Recent).</div><div style="margin-bottom:10px"></div>';}
+  if(NP&&(!cur||!(payAll>0))){h+='<div class="card"><div class="lbl">'+(cur?'Spent so far '+(D.statement?'this period':'this month'):'Spent · '+(D.ranges[M]||mName(M)))+'</div><div class="big">'+$(spent)+'</div><div class="sub">'+(cur?'No spending plan yet. On a computer: Finance HQ → Quick setup → How you get money.':'')+'</div><div style="margin-bottom:10px"></div>';}
+  else if(cur&&!(payAll>0)){h+='<div class="card"><div class="lbl">Spent so far '+(D.statement?'this period':'this month')+'</div><div class="big">'+$(spent)+'</div><div class="sub">No paycheck '+(inc>0?'':'found')+' this period yet. If a deposit is pay, set it to Income (tap it in Recent).</div><div style="margin-bottom:10px"></div>';}
   else{h+='<div class="card"><div class="lbl">'+(D.statement?(cur?'Left to spend this period':'Left over · '+(D.ranges[M]||mName(M))):(cur?'Left to spend this month':'Left over in '+mName(M)))+'</div>';
-  h+='<div class="big '+(left>=0?'good':'bad')+'">'+sgn(left)+'</div><div class="sub">'+(cur?'Pay '+(coming?'~':'')+$(payAll)+(coming?' ('+$(inc)+' so far + '+(D.coming.irregular?'your usual for the rest':D.coming.n+' paycheck'+(D.coming.n>1?'s':'')+' coming')+')':'')+((D.plan&&D.plan.parts)||[]).map(function(x){return ' − '+x.label+' '+$(x.amt);}).join('')+(bills?' − bills still due '+$(bills):'')+' − spent '+$(spent):'Pay '+$(inc)+' − spending '+$(spent))+'</div>';
+  h+='<div class="big '+(left>=0?'good':'bad')+'">'+sgn(left)+'</div><div class="sub">'+(cur&&NP?(D.plan.last?$(D.plan.money)+' to '+esc(D.plan.planText)+': '+$(payAll-spent)+' for the rest of this period':'Spending money '+$(payAll)+' − spent '+$(spent))+((D.plan.parts)||[]).map(function(x){return ' − '+x.label+' '+$(x.amt);}).join('')+(bills?' − bills still due '+$(bills):''):cur?'Pay '+(coming?'~':'')+$(payAll)+(coming?' ('+$(inc)+' so far + '+(D.coming.irregular?'your usual for the rest':D.coming.n+' paycheck'+(D.coming.n>1?'s':'')+' coming')+')':'')+((D.plan&&D.plan.parts)||[]).map(function(x){return ' − '+x.label+' '+$(x.amt);}).join('')+(bills?' − bills still due '+$(bills):'')+' − spent '+$(spent):'Pay '+$(inc)+' − spending '+$(spent))+'</div>';
   if(cur){var dl=Number(D.daysLeft)||1;
     h+='<div style="margin:6px 0 10px;font-size:14px"><b>'+(dl<=1?'Last day':dl+' days left to spend')+'</b>'+(left>0&&dl>1?' <span class="sub">· about '+$(left/Math.max(dl,1))+'/day</span>':'')+'</div>';}
   else h+='<div style="margin-bottom:10px"></div>';}
@@ -2008,10 +2057,12 @@ function render(){
 
   // Saving plan (current period)
   if(cur&&D.plan){var P=D.plan;
-    h+='<div class="two"><div class="card"><div class="lbl">Savings grew by</div><div style="font-size:26px;font-weight:700;color:var('+(P.saved>=0?'--acc':'--bad')+')">'+sgn(P.saved)+'</div><div class="sub">'+(P.goal?'goal '+$(P.goal)+(P.saved>=P.goal-0.5?' ✓':'')+(P.gross||P.out?' · in '+$(P.gross)+' · out '+$(P.out):''):P.pct?'goal '+P.pct+'% of pay — once pay lands':'set a goal in Settings')+'</div></div>'+
+    if(P.noPay){var R=P.runway;h+='<div class="two"><div class="card"><div class="lbl">Money lasts until</div><div style="font-size:22px;font-weight:700;color:var('+(R&&R.short?'--bad':'--acc')+')">'+(R?esc(R.date):'—')+'</div><div class="sub">'+(R?'at your recent '+$(R.perMonth)+'/month':'needs a couple of weeks of spending')+'</div></div>'+
+      '<div class="card"><div class="lbl">Your plan</div><div style="font-size:18px;font-weight:700">'+esc(P.planText)+'</div><div class="sub">'+$(P.money)+' in checking + savings, after card balances</div></div></div>';}
+    else h+='<div class="two"><div class="card"><div class="lbl">Savings grew by</div><div style="font-size:26px;font-weight:700;color:var('+(P.saved>=0?'--acc':'--bad')+')">'+sgn(P.saved)+'</div><div class="sub">'+(P.goal?'goal '+$(P.goal)+(P.saved>=P.goal-0.5?' ✓':'')+(P.gross||P.out?' · in '+$(P.gross)+' · out '+$(P.out):''):P.pct?'goal '+P.pct+'% of pay — once pay lands':'set a goal in Settings')+'</div></div>'+
       '<div class="card"><div class="lbl">Pay this period</div><div style="font-size:26px;font-weight:700">'+$(P.got!=null?P.got:P.pay)+'</div><div class="sub">'+(P.got!=null&&P.pay>P.got+0.5?'so far · expecting ~'+$(P.pay)+' total':'landed this period')+'</div></div></div>';
     h+='<div class="card"><div class="split"><div class="lbl">Transfers to make</div><div class="sub">tap when done</div></div>';
-    if(!P.items.length)h+='<div class="sub">Set a savings goal in Settings to get a checklist here.</div>';
+    if(!P.items.length)h+='<div class="sub">'+(P.noPay?'Nothing to move this period.':'Set a savings goal in Settings to get a checklist here.')+'</div>';
     P.items.forEach(function(it,i){h+='<div class="chk'+(it.ticked?' on':'')+'" onclick="tick('+i+')"><span class="bx">'+(it.ticked?'✓':'')+'</span><div style="flex:1"><div class="ct" style="font-weight:600">'+esc(it.label)+' · '+$(it.amt)+'</div><div class="sub">'+esc(it.note)+'</div></div><div class="sub" style="text-align:right">'+(it.ticked?'<span class="good">done</span>':(it.k==='tax'?'set aside':$(it.left)+' to go'))+'</div></div>';});
     h+='</div>';
     var S2=D.subs;
@@ -2193,7 +2244,10 @@ function getSetupData() {
     phone: yes_(S['Alerts: phone reminders (Yes/No)']), digest: yes_(S['Weekly digest (Yes/No)']),
     cushion: Number(S['Cash held for others']) || 0,
     save: S['Savings goal (% of pay)'] === '' || S['Savings goal (% of pay)'] === undefined ? 20 : pctSetting_(S['Savings goal (% of pay)']),
-    give: pctSetting_(S['Giving goal (% of pay)']), tax: pctSetting_(S['Tax set-aside (% of pay)'])
+    give: pctSetting_(S['Giving goal (% of pay)']), tax: pctSetting_(S['Tax set-aside (% of pay)']),
+    mode: S['Money comes from'] ? (noPay_(S) ? 'none' : 'pay') : (loadTx_().some(t => t.cat === 'Income' && t.amt > 50 && t.date >= new Date(Date.now() - 75 * 864e5)) ? 'pay' : 'none'),
+    plan: planLast_(S) ? 'last' : 'monthly', monthly: Number(S['Spending money per month ($)']) || '',
+    until: lastUntil_(S) ? Utilities.formatDate(lastUntil_(S), tz, 'yyyy-MM-dd') : '', money: Math.round(liquid_(S))
   });
 }
 
@@ -2221,6 +2275,12 @@ function saveSetup(json) {
   if (d.save !== undefined) setSetting_('Savings goal (% of pay)', Math.max(0, Math.min(90, Number(d.save) || 0)));
   if (d.give !== undefined) setSetting_('Giving goal (% of pay)', Math.max(0, Math.min(50, Number(d.give) || 0)));
   if (d.tax !== undefined) setSetting_('Tax set-aside (% of pay)', Math.max(0, Math.min(50, Number(d.tax) || 0)));
+  if (d.mode) {
+    setSetting_('Money comes from', d.mode === 'none' ? 'No paycheck' : 'Paychecks', 'Paychecks, or No paycheck (student, family support, between jobs)');
+    setSetting_('Spending plan', d.plan === 'last' ? 'Make it last' : 'Monthly amount', 'No paycheck only: Monthly amount, or Make it last (until the date below)');
+    setSetting_('Spending money per month ($)', Number(d.monthly) > 0 ? Number(d.monthly) : '', 'No paycheck + Monthly amount: what you can spend each month');
+    setSetting_('Make my money last until', d.until ? new Date(d.until + 'T12:00:00') : '', 'No paycheck + Make it last: e.g. the end of the semester');
+  }
   if (d.email) setSetting_('Alert email', d.email);
   setSetting_('Alerts: phone reminders (Yes/No)', d.phone ? 'Yes' : 'No');
   setSetting_('Weekly digest (Yes/No)', d.digest ? 'Yes' : 'No');
@@ -2268,6 +2328,7 @@ button{font:14px Arial;padding:8px 16px;border-radius:8px;border:1px solid #D1D5
 .go{background:#059669;color:#fff;border-color:#059669;font-weight:bold}
 .add{font-size:12px;padding:4px 10px;margin-top:6px}
 #msg{color:#6B7280;font-size:13px}
+input[type=radio]{width:auto;display:inline-block;margin:0 6px 0 0;vertical-align:middle}label{cursor:pointer}
 </style></head><body><div id="app">Loading…</div>
 <div class="bar"><span id="msg">Everything is optional — fill what you know, skip the rest.</span><span><button onclick="google.script.host.close()">Close</button> <button class="go" onclick="save()">Save</button></span></div>
 <script>
@@ -2287,10 +2348,17 @@ function draw(){
     '<td><input type="checkbox" id="tk'+i+'" '+(c.track?'checked':'')+'></td></tr>';});
   if(!D.cards.length)h+='<tr><td colspan="5" class="hint">No credit cards linked yet.</td></tr>';
   h+='</table>';
-  h+='<h3>2 · Savings goal</h3><p class="hint">Pay yourself first: this share of each paycheck goes to savings or investing. 20% is a common target. You will get a checklist on the Dashboard.</p><table>'+
+  h+='<h3>2 · How you get money</h3><table>'+
+   '<tr><td colspan="2"><label><input type="radio" name="mode" value="pay" onchange="modeUI()" '+(D.mode==='pay'?'checked':'')+'> <b>Paychecks</b> from a job</label><br>'+
+   '<label><input type="radio" name="mode" value="none" onchange="modeUI()" '+(D.mode==='none'?'checked':'')+'> <b>No regular paycheck</b> (student, family support, between jobs)</label></td></tr></table>';
+  h+='<div id="npBox"><p class="hint">Without a paycheck, Left to spend comes from a plan. You have about $'+Number(D.money||0).toLocaleString()+' in checking and savings after card balances.</p><table>'+
+   '<tr><td><label><input type="radio" name="plan" value="monthly" onchange="modeUI()" '+(D.plan!=='last'?'checked':'')+'> A set amount each month <span class="hint">(everything, bills included)</span></label></td><td>$ <input id="npmonthly" type="number" min="0" value="'+esc(D.monthly)+'" placeholder="e.g. 600"></td></tr>'+
+   '<tr><td><label><input type="radio" name="plan" value="last" onchange="modeUI()" '+(D.plan==='last'?'checked':'')+'> Make what I have last until</label></td><td><input id="npuntil" type="date" value="'+esc(D.until)+'"></td></tr></table>'+
+   '<p class="hint">Family sends money each month? Use a set amount. Living on savings or aid? Make it last until the end of the semester.</p></div>';
+  h+='<div id="payBox"><p class="hint"><b>Savings goal.</b> Pay yourself first: this share of each paycheck goes to savings or investing. 20% is a common target. You will get a checklist on the Dashboard.</p><table>'+
    '<tr><td>Save this % of pay</td><td><input id="gsave" type="number" min="0" max="90" value="'+esc(D.save)+'"></td></tr>'+
    '<tr><td>Giving (tithe / charity) % <span class="hint">optional</span></td><td><input id="ggive" type="number" min="0" max="50" value="'+esc(D.give)+'"></td></tr>'+
-   '<tr><td>Tax set-aside % <span class="hint">only for side income with no tax taken out</span></td><td><input id="gtax" type="number" min="0" max="50" value="'+esc(D.tax)+'"></td></tr></table>';
+   '<tr><td>Tax set-aside % <span class="hint">only for side income with no tax taken out</span></td><td><input id="gtax" type="number" min="0" max="50" value="'+esc(D.tax)+'"></td></tr></table></div>';
   h+='<h3>3 · Budget and alerts</h3><table>'+
    '<tr><td>Dining budget per month</td><td><input id="dining" type="number" value="'+esc(D.dining||'')+'"></td></tr>'+
    '<tr><td>Money in your accounts that is not yours <span class="hint">(e.g. holding it for family)</span></td><td><input id="cushion" type="number" value="'+esc(D.cushion||0)+'"></td></tr>'+
@@ -2312,6 +2380,7 @@ function draw(){
   D.yearly.forEach(function(y,i){h+=yearRow(y,i);});
   h+='</tbody></table><button class="add" onclick="addYear()">+ Add a yearly cost</button>';
   document.getElementById('app').innerHTML=h;
+  modeUI();
 }
 function debtRow(x,i){return '<tr><td><input id="dn'+i+'" value="'+esc(x.name)+'">'+(x.found?'<span class="tag">found: '+esc(x.found)+'</span>':'')+'</td><td><select id="dt'+i+'">'+opt(D.types,x.type)+'</select></td>'+
  '<td><input id="db'+i+'" type="number" value="'+esc(x.bal)+'"></td><td><input id="dr'+i+'" type="number" step="0.01" value="'+esc(x.rate)+'"></td><td><input id="dp'+i+'" type="number" value="'+esc(x.pay)+'"></td></tr>';}
@@ -2321,13 +2390,18 @@ function yearRow(y,i){return '<tr><td><input id="yn'+i+'" value="'+esc(y.name)+'
 function addYear(){var i=D.yearly.length;D.yearly.push({name:'',amt:'',month:''});document.getElementById('yearly').insertAdjacentHTML('beforeend',yearRow(D.yearly[i],i));}
 function addTrip(){var i=D.trips.length;D.trips.push({name:'',start:'',end:''});document.getElementById('trips').insertAdjacentHTML('beforeend',tripRow(D.trips[i],i));}
 function autoDue(i){var c=+document.getElementById('cl'+i).value,d=document.getElementById('du'+i);if(c>=1&&c<=31&&!d.dataset.touched){var v=(c+25-1)%30+1;d.value=v;d.placeholder='estimate';}d.oninput=function(){d.dataset.touched=1;};}
+function rv(n){var e=document.querySelector('input[name='+n+']:checked');return e?e.value:'';}
+function modeUI(){var np=rv('mode')==='none';document.getElementById('npBox').style.display=np?'':'none';document.getElementById('payBox').style.display=np?'none':'';}
 function v(id){var e=document.getElementById(id);return e?(e.type==='checkbox'?e.checked:e.value):'';}
 function save(){
   var bad=false;D.cards.forEach(function(c,i){['cl','du'].forEach(function(p){var x=v(p+i);if(x!==''&&(+x<1||+x>31))bad=true;});});
   if(+v('gsave')<0||+v('gsave')>90||+v('ggive')<0||+v('ggive')>50||+v('gtax')<0||+v('gtax')>50){document.getElementById('msg').innerHTML='<span style="color:#DC2626">Goal percentages look off — use numbers like 20 (for 20%).</span>';return;}
   if(bad){document.getElementById('msg').innerHTML='<span style="color:#DC2626">Closing and due days must be between 1 and 31.</span>';return;}
+  if(rv('mode')==='none'){var pl=rv('plan');
+    if(pl==='monthly'&&!(+v('npmonthly')>0)){document.getElementById('msg').innerHTML='<span style="color:#DC2626">Add how much you can spend each month (section 2).</span>';return;}
+    if(pl==='last'&&!(v('npuntil')&&new Date(v('npuntil')+'T12:00:00')>new Date())){document.getElementById('msg').innerHTML='<span style="color:#DC2626">Pick a future date to make your money last until (section 2).</span>';return;}}
   var out={cards:D.cards.map(function(c,i){return{name:c.name,close:v('cl'+i),due:v('du'+i),track:v('tk'+i),preset:v('pr'+i)};}),
-    dining:v('dining'),cushion:v('cushion'),email:v('email'),phone:v('phone'),digest:v('digest'),save:v('gsave'),give:v('ggive'),tax:v('gtax'),
+    dining:v('dining'),cushion:v('cushion'),email:v('email'),phone:v('phone'),digest:v('digest'),save:v('gsave'),give:v('ggive'),tax:v('gtax'),mode:rv('mode'),plan:rv('plan'),monthly:v('npmonthly'),until:v('npuntil'),
     debts:D.debts.map(function(x,i){return{name:v('dn'+i),type:v('dt'+i),bal:v('db'+i),rate:v('dr'+i),pay:v('dp'+i)};}),
     trips:D.trips.map(function(t,i){return{name:v('tn'+i),start:v('ts'+i),end:v('te'+i)};}),
     yearly:D.yearly.map(function(y,i){return{name:v('yn'+i),amt:v('ya'+i),month:v('ym'+i)};})};
@@ -2470,7 +2544,9 @@ function buildHealth_() {
   const trk = subsTracker_();
   add(trk.still.length ? 2 : 0, 'Cancelled subscriptions', trk.still.length ? 'Still charging: ' + trk.still.map(subName_).join(', ') : trk.savedList.length ? trk.savedList.length + ' cancelled, none charging' : 'None marked',
     'Check the cancellation went through with the company, or set Status back to "keep" in Subscriptions.');
-  add(Number(S['Savings goal (% of pay)']) > 0 ? 0 : 1, 'Savings goal', Number(S['Savings goal (% of pay)']) > 0 ? S['Savings goal (% of pay)'] + '% of pay' : 'Not set',
+  if (noPay_(S)) add((planLast_(S) ? lastUntil_(S) > new Date() : Number(S['Spending money per month ($)']) > 0) ? 0 : 1, 'Spending plan', planText_(S),
+    'Finance HQ → Quick setup → "How you get money" — a set amount each month, or make it last until a date.');
+  else add(Number(S['Savings goal (% of pay)']) > 0 ? 0 : 1, 'Savings goal', Number(S['Savings goal (% of pay)']) > 0 ? S['Savings goal (% of pay)'] + '% of pay' : 'Not set',
     'Set "Savings goal (% of pay)" in Settings — 20% is a common target.');
   { const av = PropertiesService.getScriptProperties().getProperty('UPDATE_AVAILABLE');
     add(av ? 1 : 0, 'Updates', av ? 'Version ' + JSON.parse(av).version + ' is ready (you have ' + FHQ_VERSION + ')' : 'Up to date (' + FHQ_VERSION + ')',
@@ -2480,7 +2556,7 @@ function buildHealth_() {
     'Pick the month each one is due in the Yearly costs tab.');
   try {
     const BP = budgetPlan_(tx, S), freeH = BP.pay - BP.keep - BP.fixed - BP.limTot;
-    add(BP.pay > 0 && freeH < -25 ? 1 : 0, 'Limits fit your pay', !(BP.pay > 0) ? 'No pay yet to compare with' : freeH >= -25 ? 'Yes — $' + Math.round(Math.max(0, freeH)).toLocaleString() + ' unplanned after saving' : 'Limits are $' + Math.round(-freeH).toLocaleString() + ' more than you have after saving',
+    add(BP.pay > 0 && freeH < -25 ? 1 : 0, noPay_(S) ? 'Limits fit your plan' : 'Limits fit your pay', !(BP.pay > 0) ? 'No pay yet to compare with' : freeH >= -25 ? 'Yes — $' + Math.round(Math.max(0, freeH)).toLocaleString() + ' unplanned after saving' : 'Limits are $' + Math.round(-freeH).toLocaleString() + ' more than you have after saving',
       'Open the Budget tab and tick "Use it?" on the suggestions, or lower a few limits.');
   } catch (e) {}
   const P = PERIOD_ || {};
@@ -2566,8 +2642,9 @@ function pctSetting_(v) {
 }
 // expected = pay you expect for the whole period (so far + paychecks still coming); the plan uses whichever is bigger.
 function checklist_(tx, S, key, expected) {
-  const st = periodStats_(key, tx), got = Math.max(0, st.pay), pay = Math.max(got, Number(expected) || 0);
-  const pct = k => pctSetting_(S[k]) / 100;
+  const np = noPay_(S), st = periodStats_(key, tx);
+  const pay = np ? allowance_(key, tx, S, st) : Math.max(Math.max(0, st.pay), Number(expected) || 0), got = np ? pay : Math.max(0, st.pay);
+  const pct = k => np ? 0 : pctSetting_(S[k]) / 100;      // no paycheck: no %-of-pay goals
   const t = pct('Tax set-aside (% of pay)'), g = pct('Giving goal (% of pay)'), s = pct('Savings goal (% of pay)');
   const taxAmt = pay * t, giveAmt = (pay - taxAmt) * g, saveAmt = (pay - taxAmt - giveAmt) * s;
   const moves = savingsMoves_(tx, key);
@@ -2585,7 +2662,7 @@ function checklist_(tx, S, key, expected) {
     i.ticked = ticks[i.k] === true || (ticks[i.k] !== false && i.auto);
     i.left = Math.max(0, i.amt - i.progress);
   });
-  return { pay: pay, got: got, expected: pay > got + 0.5, items: items, moves: moves, goalSave: saveAmt, yearly: yr.per, setAside: taxAmt + giveAmt + saveAmt + yr.per,
+  return { pay: pay, got: got, expected: pay > got + 0.5, noPay: np, items: items, moves: moves, goalSave: saveAmt, yearly: yr.per, setAside: taxAmt + giveAmt + saveAmt + yr.per,
     parts: items.map(i => ({ label: i.k === 'save' ? Math.round(s * 100) + '% to savings' : i.k === 'yearly' ? 'yearly costs' : i.k === 'give' ? 'giving' : 'taxes', amt: Math.round(i.amt * 100) / 100 })) };
 }
 function getTicks_() { try { return JSON.parse(PropertiesService.getScriptProperties().getProperty('TICKS') || '{}'); } catch (e) { return {}; } }
@@ -2683,7 +2760,7 @@ function buildDashboard_(tx, missed, debt) {
   rng(r, 6, 1, 3).merge().setValue('Updated ' + Utilities.formatDate(now, tz, 'EEE MMM d, h:mm a')).setFontColor(KJ.mute).setHorizontalAlignment('right');
   sh.setRowHeight(r, 44); r++;
   rng(r, 1, 1, 5).merge().setValue((PM.on ? 'Statement period ' + periodRange_(thisMonth) : Utilities.formatDate(pb[0], tz, 'MMMM yyyy')) + '  ·  ' +
-    (past ? 'finished period' : daysLeft === 1 ? 'last day' : daysLeft + ' days to go') + (Number(S['Savings goal (% of pay)']) ? '  ·  Goal: save ' + Number(S['Savings goal (% of pay)']) + '% of pay' : ''))
+    (past ? 'finished period' : daysLeft === 1 ? 'last day' : daysLeft + ' days to go') + (cl.noPay ? '  ·  Plan: ' + planText_(S) : Number(S['Savings goal (% of pay)']) ? '  ·  Goal: save ' + Number(S['Savings goal (% of pay)']) + '% of pay' : ''))
     .setFontColor(KJ.mute);
   {
     const label = m => Utilities.formatDate(new Date(+m.slice(0, 4), +m.slice(5, 7) - 1, 15), tz, 'MMM yyyy') + (m === cur ? ' (current)' : '');
@@ -2699,13 +2776,21 @@ function buildDashboard_(tx, missed, debt) {
   }
 
   // ---- tiles
+  const NP = cl.noPay, rw = NP ? runway_(tx, S) : null, mPlan = Number(S['Spending money per month ($)']) || 0;
   const tiles = [
-    past ? ['LEFT OVER', st.left, money, st.left >= 0 ? KJ.green : KJ.red, 'pay $' + Math.round(st.pay).toLocaleString() + ' − spent $' + (Math.round(st.spend) || 0).toLocaleString()]
+    NP && past ? ['SPENT', st.spend, money, mPlan && !planLast_(S) && st.spend > mPlan ? KJ.red : KJ.ink, mPlan && !planLast_(S) ? 'of your ' + fmt$_(mPlan) + ' plan · ' + (st.spend <= mPlan ? fmt$_(mPlan - st.spend) + ' under' : fmt$_(st.spend - mPlan) + ' over') : 'that period']
+    : NP && !(payAll > 0) ? ['SPENT SO FAR', st.spend, money, KJ.ink, 'no spending plan yet: Finance HQ → Quick setup → How you get money']
+    : NP ? ['LEFT TO SPEND', spendable, money, spendable >= 0 ? KJ.green : KJ.red,
+        (planLast_(S) ? fmt$_(liquid_(S)) + ' to ' + planText_(S) + ': ' + fmt$_(payAll - st.spend) + ' for the rest of this period' : 'spending money ' + fmt$_(payAll) + ' − spent ' + fmt$_(st.spend)) +
+        cl.parts.map(x => ' − ' + x.label + ' ' + fmt$_(x.amt)).join('') + (bills.amt ? ' − bills still due ' + fmt$_(bills.amt) : '')]
+    : past ? ['LEFT OVER', st.left, money, st.left >= 0 ? KJ.green : KJ.red, 'pay $' + Math.round(st.pay).toLocaleString() + ' − spent $' + (Math.round(st.spend) || 0).toLocaleString()]
       : !(payAll > 0) ? ['SPENT SO FAR', st.spend, money, KJ.ink, (tx.some(t => t.cat === 'Income' && t.amt > 50) ? 'no pay expected this period' : 'no paycheck found yet') + ' — if a deposit is pay, set it to Income in Transactions']
       : ['LEFT TO SPEND', spendable, money, spendable >= 0 ? KJ.green : KJ.red,
         'pay ' + (coming.amt ? '~' : '') + '$' + Math.round(payAll).toLocaleString() + cl.parts.map(x => ' − ' + x.label + ' $' + Math.round(x.amt).toLocaleString()).join('') +
         (bills.amt ? ' − bills still due $' + Math.round(bills.amt).toLocaleString() : '') + ' − spent $' + (Math.round(st.spend) || 0).toLocaleString()],
-    ['SAVINGS GREW BY', cl.moves.into, money, cl.moves.into >= 0 ? KJ.blue : KJ.red, 'in $' + Math.round(cl.moves.gross).toLocaleString() + ' · out $' + Math.round(cl.moves.takenOut).toLocaleString() + (cl.goalSave ? ' · goal $' + Math.round(cl.goalSave).toLocaleString() + (cl.moves.into >= cl.goalSave - 0.5 ? ' ✓' : '') : '')],
+    NP ? ['MONEY LASTS UNTIL', !rw ? '—' : rw.date ? Utilities.formatDate(rw.date, tz, 'MMM d, yyyy') : '3+ years', '@', !rw || !rw.date ? KJ.ink : planLast_(S) && lastUntil_(S) && rw.date < lastUntil_(S) ? KJ.red : KJ.green,
+      rw ? fmt$_(rw.money) + ' at your recent ' + fmt$_(rw.perMonth) + '/month' + (planLast_(S) && lastUntil_(S) && rw.date && rw.date < lastUntil_(S) ? ' · short of ' + Utilities.formatDate(lastUntil_(S), tz, 'MMM d') : '') : 'needs a couple of weeks of spending']
+    : ['SAVINGS GREW BY', cl.moves.into, money, cl.moves.into >= 0 ? KJ.blue : KJ.red, 'in $' + Math.round(cl.moves.gross).toLocaleString() + ' · out $' + Math.round(cl.moves.takenOut).toLocaleString() + (cl.goalSave ? ' · goal $' + Math.round(cl.goalSave).toLocaleString() + (cl.moves.into >= cl.goalSave - 0.5 ? ' ✓' : '') : '')],
     ['NET WORTH', nwRow ? Number(nwRow[3]) : '—', money, KJ.ink, nwRow && nwStart && nwStart !== nwRow ? ((nwRow[3] - nwStart[3]) >= 0 ? '▲ $' : '▼ $') + Math.round(Math.abs(nwRow[3] - nwStart[3])).toLocaleString() + (past ? ' that period' : ' this period') : past && !nwRow ? 'no balance history that far back' : 'all accounts minus debts'],
     ['SAFETY NET', nwRow ? cushion : '—', '0.0" mo"', cushion >= goal ? KJ.green : KJ.orange, 'goal ' + goal + ' months ($' + Math.round(goal * baseAvg).toLocaleString() + ')']
   ];
@@ -2746,9 +2831,9 @@ function buildDashboard_(tx, missed, debt) {
   {
     const r0 = r; head(r, 'Transfers to make', 'tick the box when it\'s done'); r++;
     if (!cl.items.length) {
-      rng(r, 1, 1, W).merge().setValue('Set a savings goal in Settings ("Savings goal (% of pay)") and your transfers show up here.').setFontColor(KJ.mute); r++;
+      rng(r, 1, 1, W).merge().setValue(NP ? 'Nothing to move this period. Yearly costs you add in Quick setup show up here.' : 'Set a savings goal in Settings ("Savings goal (% of pay)") and your transfers show up here.').setFontColor(KJ.mute); r++;
     } else {
-      if (!cl.pay) { rng(r, 1, 1, W).merge().setValue('No pay yet this period — amounts fill in when your paycheck lands.').setFontColor(KJ.mute); r++; }
+      if (!cl.pay && !NP) { rng(r, 1, 1, W).merge().setValue('No pay yet this period — amounts fill in when your paycheck lands.').setFontColor(KJ.mute); r++; }
       cl.items.forEach(i => {
         const done = i.ticked;
         rng(r, 1).insertCheckboxes().setValue(done).setHorizontalAlignment('center');
@@ -3116,12 +3201,22 @@ function insightsNow_(tx, S) {
   const pb = periodBounds_(cur), today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const total = Math.round((pb[1] - pb[0]) / 864e5) + 1, day = Math.min(total, Math.max(1, Math.round((today - pb[0]) / 864e5) + 1));
   const bills = billsComing_(tx, cur, S), left = cl.pay - cl.setAside - bills.amt - st.spend, daysLeft = total - day + 1;
-  if (day <= 4) out.push(['info', 'Early days', '$' + (Math.round(st.spend) || 0).toLocaleString() + ' spent so far. You have $' + Math.round(left).toLocaleString() + ' to spend over ' + daysLeft + ' days' + (bills.amt ? ' after $' + Math.round(bills.amt).toLocaleString() + ' of bills still due (' + bills.list.map(x => x.cat.toLowerCase()).join(', ') + ')' : '') + ' — about $' + Math.max(0, Math.round(left / daysLeft)).toLocaleString() + '/day.']);
+  if (day <= 4) out.push(['info', 'Early days', '$' + (Math.round(st.spend) || 0).toLocaleString() + ' spent so far. You have ' + fmt$_(left) + ' to spend over ' + daysLeft + ' days' + (bills.amt ? ' after $' + Math.round(bills.amt).toLocaleString() + ' of bills still due (' + bills.list.map(x => x.cat.toLowerCase()).join(', ') + ')' : '') + ' — about $' + Math.max(0, Math.round(left / daysLeft)).toLocaleString() + '/day.']);
   else {
     const proj = st.spend / day * total + bills.amt, budget = cl.pay - cl.setAside;
     out.push([proj <= budget ? 'good' : proj <= budget * 1.1 ? 'watch' : 'bad', proj <= budget ? 'On pace' : 'Spending faster than planned',
-      'At this pace you\'ll spend about $' + Math.round(proj).toLocaleString() + ' this period vs $' + Math.round(budget).toLocaleString() + ' available after saving. ' +
+      'At this pace you\'ll spend about $' + Math.round(proj).toLocaleString() + ' this period vs $' + Math.round(budget).toLocaleString() + (cl.noPay ? ' in your plan. ' : ' available after saving. ') +
       (left >= 0 ? '$' + Math.round(left).toLocaleString() + ' left — about $' + Math.round(left / daysLeft).toLocaleString() + '/day.' : 'You\'re already $' + Math.round(-left).toLocaleString() + ' over.')]);
+  }
+  if (cl.noPay) {
+    const rw = runway_(tx, S), u = lastUntil_(S), tz = Session.getScriptTimeZone();
+    if (!(cl.pay > 0)) out.push(['watch', 'No spending plan yet', 'Finance HQ → Quick setup → "How you get money": pick a set amount each month, or make your money last until a date.']);
+    if (rw && rw.date) {
+      const short = planLast_(S) && u && rw.date < u;
+      const cut = short ? rw.perMonth - rw.money / Math.max(0.5, (u - today) / (30.4 * 864e5)) : 0;
+      out.push([short ? 'bad' : 'good', 'Your money lasts until ' + Utilities.formatDate(rw.date, tz, 'MMM d, yyyy'),
+        fmt$_(rw.money) + ' at your recent pace of ' + fmt$_(rw.perMonth) + '/month.' + (short ? ' That\'s before ' + Utilities.formatDate(u, tz, 'MMM d') + ': spend about ' + fmt$_(cut) + ' less a month to make it.' : u && planLast_(S) ? ' That gets you past ' + Utilities.formatDate(u, tz, 'MMM d') + ' ✓' : '')]);
+    } else if (rw) out.push(['good', 'Your money lasts 3+ years at this pace', fmt$_(rw.money) + ' at ' + fmt$_(rw.perMonth) + '/month.']);
   }
   const lim = Object.keys(st.byCat).map(c => [c, st.byCat[c], explicitLimit_(c, S)]).filter(x => x[2] > 0 && NO_LIMIT_CATS.indexOf(x[0]) === -1 && FIXED_CATS.indexOf(x[0]) === -1);
   const over = lim.filter(x => x[1] >= x[2]).sort((a, b) => (b[1] - b[2]) - (a[1] - a[2]));
@@ -3151,6 +3246,13 @@ function insightsReview_(key, tx, S) {
   const out = [], st = periodStats_(key, tx);
   const prev = priorPeriods_(key, 3, tx).map(k => periodStats_(k, tx)).filter(p => p.tx.length);
   const goal = pctSetting_(S['Savings goal (% of pay)']) / 100, rate = st.pay ? st.left / st.pay : 0;
+  if (noPay_(S)) {                                   // no paycheck: judge spending against the plan and your own average
+    const mp = !planLast_(S) ? Number(S['Spending money per month ($)']) || 0 : 0;
+    const avgSp = prev.length ? prev.reduce((s2, p) => s2 + p.spend, 0) / prev.length : 0;
+    if (mp) out.push([st.spend <= mp ? 'good' : st.spend <= mp * 1.1 ? 'watch' : 'bad', 'Spent ' + fmt$_(st.spend) + ' of your ' + fmt$_(mp) + ' plan',
+      st.spend <= mp ? fmt$_(mp - st.spend) + ' under.' : fmt$_(st.spend - mp) + ' over.']);
+    else out.push([!avgSp || st.spend <= avgSp ? 'good' : 'watch', 'Spent ' + fmt$_(st.spend), avgSp ? (st.spend <= avgSp ? fmt$_(avgSp - st.spend) + ' less than your average.' : fmt$_(st.spend - avgSp) + ' more than your average.') : '']);
+  } else {
   out.push([rate >= Math.max(goal, 0.0001) ? 'good' : rate >= 0 ? 'watch' : 'bad', 'You kept ' + fmt$_(st.left) + (st.pay ? ' (' + Math.round(rate * 100) + '% of pay)' : ''),
     !st.pay ? 'No pay recorded this period.' : rate >= goal ? (goal ? 'That beats your ' + Math.round(goal * 100) + '% goal.' : 'Nice.') : rate >= 0 ? 'Short of the ' + Math.round(goal * 100) + '% goal by ' + fmt$_(st.pay * goal - st.left) + '.' : 'You spent more than you made.']);
   const mv = savingsMoves_(tx, key);
@@ -3161,6 +3263,7 @@ function insightsReview_(key, tx, S) {
   }
   const avgPay = prev.length ? prev.reduce((s, p) => s + p.pay, 0) / prev.length : 0;
   if (avgPay && st.pay > avgPay * 1.3) out.push(['info', 'Bigger pay than usual', fmt$_(st.pay) + ' vs ~' + fmt$_(avgPay) + ' — likely an extra paycheck, so this period looks better than a normal one.']);
+  }
   const over = Object.keys(st.byCat).map(c => [c, st.byCat[c] - limitFor_(c, key, tx, S), limitFor_(c, key, tx, S)])
     .filter(x => x[2] && x[1] > 0 && NO_LIMIT_CATS.indexOf(x[0]) === -1 && FIXED_CATS.indexOf(x[0]) === -1).sort((a, b) => b[1] - a[1]);
   out.push(over.length ? ['bad', 'Over limit in ' + over.length + ' categor' + (over.length > 1 ? 'ies' : 'y'), over.slice(0, 4).map(x => x[0] + ' by ' + fmt$_(x[1])).join(', ') + '.']
@@ -3367,7 +3470,7 @@ function refreshAfterPhoneEdit() { liveRebuild_('Transactions'); return true; }
 // account names or store names. Turn it off in Settings: "Share usage check-ins with the Finance HQ creator (Yes/No)".
 // The creator fills CHECKIN below once (run setupTesterTracker in their own copy). Blank = check-ins are off for everyone.
 const CHECKIN = {"url":"https://docs.google.com/forms/d/e/1FAIpQLScXchq1zCkaQV7h3XxZPVmPBdjLkJYV6mmv5V_pirhoTTw-Hw/formResponse","ids":{"tester":"entry.344453892","week":"entry.1595464086","synced":"entry.199959467","accounts":"entry.329170921","newTx":"entry.249597811","appDays":"entry.728590027","sheetDays":"entry.1864243060","catFixes":"entry.166478788","ticks":"entry.2128658648","limitEdits":"entry.558089935","setupDone":"entry.1823756908","savingsGoal":"entry.729450541","yearly":"entry.1270006795","problems":"entry.1275410742","version":"entry.1893017258"}};
-const FHQ_VERSION = '2026.11.22.8';
+const FHQ_VERSION = '2026.11.22.9';
 const CHECKIN_FIELDS = [
   ['tester', 'Tester (Google account)'], ['week', 'Week since install'], ['synced', 'Bank synced in last 2 days'],
   ['accounts', 'Accounts linked'], ['newTx', 'New transactions this week'], ['appDays', 'Days phone app opened (7d)'],
@@ -3558,7 +3661,7 @@ function go(){var t=document.getElementById('tok').value,b=document.getElementBy
   b.disabled=true;m.className='hint';m.textContent='Connecting and building your sheet… (1–3 minutes)';
   google.script.run.withSuccessHandler(function(r){m.className='ok';m.textContent=r+' Opening Quick setup…';
       setTimeout(function(){google.script.run.showQuickSetup();},1200);})
-    .withFailureHandler(function(e){b.disabled=false;m.className='bad';m.textContent=e.message;}).connectBank(t);}
+    .withFailureHandler(function(e){b.disabled=false;m.className='bad';var x=String(e&&e.message||e);m.textContent=/server error|PERMISSION_DENIED|authorization is required|ScriptError/i.test(x)?'Google could not run this, usually because this browser is signed into more than one Google account (often a school or work one). Click your profile picture → Sign out → Remove an account to take the extra one off, or use a Chrome profile with only this Gmail. Then reload the sheet, make a new SimpleFIN token, and try again.':x;}).connectBank(t);}
 </script></body></html>`;
 
 // ===== PART 13 — Payday nudge · feedback check-ins =====
@@ -3567,6 +3670,7 @@ function go(){var t=document.getElementById('tok').value,b=document.getElementBy
 function paydayNudge_() {
   const S = settings_();
   if (!yes_(S['Payday nudge (Yes/No)'] === undefined ? 'Yes' : S['Payday nudge (Yes/No)'])) return;
+  if (noPay_(S)) return;                                        // no paychecks to nudge about
   const P = PropertiesService.getScriptProperties(), tz = Session.getScriptTimeZone();
   const tx = loadTx_(), since = new Date(Date.now() - 3 * 864e5);
   const pays = tx.filter(t => t.cat === 'Income' && t.amt > 50);

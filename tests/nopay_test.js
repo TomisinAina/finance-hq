@@ -1,0 +1,24 @@
+process.env.FRESH = '1';
+const M = require('/tmp/mock.js'); const fs = require('fs'), vm = require('vm');
+const mails = []; global.MailApp = { sendEmail: (a, b) => mails.push(typeof a === 'object' ? a : { subject: b }) };
+global.SF_HANDLER = () => { throw new Error('no network'); };
+const code = fs.readFileSync('/home/claude/pub/FinanceHQ.gs', 'utf8');
+const ctx = vm.createContext(global); vm.runInContext(code, ctx);
+const L = console.log; console.log = () => {};
+const run = c => { try { return vm.runInContext(c, ctx); } catch (e) { console.log = L; L('ERR', c.slice(0,40), e.stack.split('\n').slice(0, 4).join(' / ')); console.log = () => {}; } };
+run('startDemo(); financeDailySync(); phase2Daily();');
+// make it a student: drop paychecks
+run(`(function(){const sh=sheet_('Transactions');const v=sh.getDataRange().getValues();const h=v[0];const ci=h.indexOf('Category');const keep=[h].concat(v.slice(1).filter(r=>r[ci]!=='Income'));sh.clearContents();sh.getRange(1,1,keep.length,h.length).setValues(keep);})()`);
+const show = n => (M.data[n] || []).map(r => r.filter(v => v !== '' && v != null).map(v => v instanceof Date ? v.toISOString().slice(0, 10) : typeof v === 'number' ? Math.round(v * 100) / 100 : String(v).slice(0, 110)).join(' | ')).filter(Boolean);
+const scen = (label, cmds) => { run(cmds); run('PERIOD_=null; phase2Daily(); weeklyDigest(true);');
+  console.log = L; L('\n=== ' + label); L(show('Dashboard').slice(1, 8).join('\n'));
+  L('-- Insights'); L(show('Insights').slice(2, 14).join('\n'));
+  L('-- Health', show('Health').filter(l => /plan|Savings goal/i.test(l)).join(' || '));
+  L('-- mail', mails.length ? mails[mails.length-1].subject : '');
+  const app = JSON.parse(run('getAppData()')); L('-- app plan', JSON.stringify({noPay:app.plan.noPay,pay:app.plan.pay,planText:app.plan.planText,runway:app.plan.runway,items:app.plan.items.length}));
+  if(/last/.test(label)) fs.writeFileSync('/tmp/app_np.json', run('getAppData()')); const sd = JSON.parse(run('getSetupData()')); L('-- setup', sd.mode, sd.plan, sd.monthly, sd.until, sd.money);
+  console.log = () => {}; };
+scen('no plan yet (auto detect)', `0`);
+scen('monthly 600', `saveSetup(JSON.stringify(Object.assign(JSON.parse(getSetupData()),{mode:'none',plan:'monthly',monthly:600,until:''})))`);
+scen('make it last until 2027-05-15', `saveSetup(JSON.stringify(Object.assign(JSON.parse(getSetupData()),{mode:'none',plan:'last',monthly:'',until:'2027-05-15'})))`);
+scen('back to paychecks', `saveSetup(JSON.stringify(Object.assign(JSON.parse(getSetupData()),{mode:'pay'})))`);
