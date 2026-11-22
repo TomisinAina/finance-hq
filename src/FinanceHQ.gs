@@ -145,6 +145,7 @@ function financeDailySync() {
 function sfFetch_(start, end) {
   const access = PropertiesService.getScriptProperties().getProperty(SF_ACCESS);
   if (!access) throw new Error('Not connected - run financeSetup first.');
+  if (access === DEMO_ACCESS) return demoBank_(start, end);
   const m = access.match(/^(https?:\/\/)([^:]+):([^@]+)@(.+)$/);
   let url = m[1] + m[4] + '/accounts?start-date=' + Math.floor(start / 1000);
   if (end) url += '&end-date=' + Math.floor(end / 1000);
@@ -1778,7 +1779,7 @@ function deliverAlerts_(alerts, S) {
   props.setProperty('P3_WEEK', JSON.stringify(log.filter(x => Date.now() - x[0] < 8 * 864e5).slice(-40)));
   alerts.sort((a, b) => b.urgent - a.urgent);
   if (yes_(S['Alerts: email (Yes/No)']))
-    MailApp.sendEmail({ to: alertEmail_(), subject: 'Finance HQ: ' + alerts[0].text + (alerts.length > 1 ? ' (+' + (alerts.length - 1) + ' more)' : ''),
+    mail_({ to: alertEmail_(), subject: 'Finance HQ: ' + alerts[0].text + (alerts.length > 1 ? ' (+' + (alerts.length - 1) + ' more)' : ''),
       htmlBody: '<div style="font-family:Arial,sans-serif;font-size:14px"><ul>' + alerts.map(a => '<li style="margin:6px 0">' + (a.urgent ? '⚠️ ' : '') + a.text + '</li>').join('') +
         '</ul><p style="color:#6B7280">Finance HQ · <a href="' + finSS_().getUrl() + '">open sheet</a></p></div>' });
   if (yes_(S['Alerts: phone reminders (Yes/No)']))
@@ -1786,6 +1787,7 @@ function deliverAlerts_(alerts, S) {
 }
 
 function phoneReminder_(title, start, desc) {
+  if (isDemo_()) return;
   const ev = CalendarApp.getDefaultCalendar().createEvent(title.slice(0, 120), start, new Date(start.getTime() + 15 * 60000), { description: desc || '' });
   ev.removeAllReminders(); ev.addPopupReminder(0);
 }
@@ -1818,7 +1820,7 @@ function weeklyDigest(force) {
     (week ? '<h3>Alerts this week</h3><ul>' + week + '</ul>' : '') +
     (unc.length ? '<p style="color:#6B7280">' + unc.length + ' uncategorized purchases (' + fmt$_(-unc.reduce((s, t) => s + t.amt, 0)) + ') — add Rules so they land in the right place.</p>' : '') +
     '<p style="color:#6B7280"><a href="' + finSS_().getUrl() + '">Open Finance HQ</a></p></div>';
-  MailApp.sendEmail({ to: alertEmail_(), subject: 'Finance HQ weekly: ' + fmt$_(st.left) + ' left, ' + (daysLeft === 1 ? 'last day of the period' : daysLeft + ' days to go'), htmlBody: html });
+  mail_({ to: alertEmail_(), subject: 'Finance HQ weekly: ' + fmt$_(st.left) + ' left, ' + (daysLeft === 1 ? 'last day of the period' : daysLeft + ' days to go'), htmlBody: html });
 }
 
 // ---------------------------------------------------------------- monthly insights (used by Archive)
@@ -1831,7 +1833,7 @@ function monthlyInsightsEmail_(key, tx, pdfBlob) {
   const S = settings_();
   if (!yes_(S['Monthly insights email (Yes/No)'])) return;
   const title = Utilities.formatDate(new Date(key + '-15T12:00:00'), Session.getScriptTimeZone(), 'MMMM yyyy');
-  MailApp.sendEmail({ to: alertEmail_(), subject: 'Finance HQ: your ' + title + ' review',
+  mail_({ to: alertEmail_(), subject: 'Finance HQ: your ' + title + ' review',
     htmlBody: '<div style="font-family:Arial,sans-serif;font-size:14px;max-width:560px"><h2>' + title + ' (' + periodRange_(key) + ')</h2><ul>' +
       insights_(key, tx, S).map(s => '<li style="margin:6px 0">' + s + '</li>').join('') + '</ul><p style="color:#6B7280">Full summary attached.</p></div>',
     attachments: pdfBlob ? [pdfBlob] : [] });
@@ -1877,7 +1879,7 @@ function getAppData() {
       return { pay: c.pay, got: c.got, setAside: Math.round(c.setAside * 100) / 100, parts: c.parts, bills: bl.amt, billList: bl.list, goal: c.goalSave, pct: pctSetting_(S['Savings goal (% of pay)']), saved: c.moves.into, gross: c.moves.gross, out: c.moves.takenOut,
       items: c.items.map(i => ({ k: i.k, label: i.label, amt: Math.round(i.amt), note: i.note, left: Math.round(i.left), ticked: i.ticked, auto: i.auto })) }; })(),
     subs: (() => { const t = subsTracker_(); return { could: t.could, saved: t.saved, couldList: t.couldList.map(subName_), savedList: t.savedList.map(subName_) }; })(),
-    limits: limits, cats: categoryList_(), fixedCats: FIXED_CATS.concat(NO_LIMIT_CATS)
+    limits: limits, cats: categoryList_(), demo: isDemo_(), fixedCats: FIXED_CATS.concat(NO_LIMIT_CATS)
   });
 }
 
@@ -1974,7 +1976,7 @@ function render(){
   var cats=Object.keys(byCat).map(function(k){return [k,byCat[k]];}).filter(function(x){return x[1]>0.5;}).sort(function(a,b){return b[1]-a[1];});
   var spent=Object.keys(byCat).reduce(function(s,k){return s+byCat[k];},0),coming=cur&&D.coming?D.coming.amt:0,kp=cur?(Number(D.keepPct)||0):0,payAll=cur?Math.max(inc,Number(D.plan&&D.plan.pay)||0):inc,keep=cur?(Number(D.plan&&D.plan.setAside)||payAll*kp):0,bills=cur?(Number(D.plan&&D.plan.bills)||0):0,left=payAll-keep-bills-spent,top=cats.filter(function(c){return (D.fixedCats||[]).indexOf(c[0])<0;}).slice(0,3),rest=Math.max(0,spent-top.reduce(function(s,x){return s+x[1];},0));
   var h='';
-  h+='<div class="top"><h1>Finance HQ</h1><div class="sub" style="text-align:right">'+(D.ranges[M]||'')+'</div></div>';
+  h+='<div class="top"><h1>Finance HQ'+(D.demo?' <span style="font-size:13px;font-weight:600;color:#F59E0B">DEMO</span>':'')+'</h1><div class="sub" style="text-align:right">'+(D.ranges[M]||'')+'</div></div>';
   h+='<div class="pills">'+MONTHS.slice(-6).map(function(m){return '<button class="pl'+(m===M?' on':'')+'" onclick="pick(\\''+m+'\\')">'+mName(m).split(' ')[0]+(m===D.current?' · now':'')+'</button>';}).join('')+'</div>';
 
   // Bills due (always current)
@@ -2086,7 +2088,7 @@ function financeMenu_() {
   try {
     const m = SpreadsheetApp.getUi().createMenu('Finance HQ');
     if (!isConnected_()) {                       // brand-new copy: one clear first step
-      m.addItem('Connect my bank…', 'showConnect').addItem('Get help…', 'showSupport').addItem('What check-ins share', 'showCheckinPreview').addToUi();
+      m.addItem('Connect my bank…', 'showConnect').addItem('See a demo with sample data', 'startDemo').addItem('Get help…', 'showSupport').addItem('What check-ins share', 'showCheckinPreview').addToUi();
       return;
     }
     m.addItem('Quick setup…', 'showQuickSetup')
@@ -2674,7 +2676,7 @@ function buildDashboard_(tx, missed, debt) {
   let r = 1;
 
   // ---- title
-  rng(r, 1, 1, 5).merge().setValue('Finance HQ').setFontSize(22).setFontWeight('bold');
+  rng(r, 1, 1, 5).merge().setValue(isDemo_() ? 'Finance HQ · demo (sample data)' : 'Finance HQ').setFontSize(22).setFontWeight('bold');
   rng(r, 6, 1, 3).merge().setValue('Updated ' + Utilities.formatDate(now, tz, 'EEE MMM d, h:mm a')).setFontColor(KJ.mute).setHorizontalAlignment('right');
   sh.setRowHeight(r, 44); r++;
   rng(r, 1, 1, 5).merge().setValue((PM.on ? 'Statement period ' + periodRange_(thisMonth) : Utilities.formatDate(pb[0], tz, 'MMMM yyyy')) + '  ·  ' +
@@ -3224,7 +3226,7 @@ function archiveYearly() {
   const pdf = archiveYear_(y, tx, false);
   const S = settings_();
   if (pdf && yes_(S['Monthly insights email (Yes/No)'])) {
-    try { MailApp.sendEmail({ to: alertEmail_(), subject: 'Finance HQ: your ' + y + ' year in review', htmlBody: '<div style="font-family:Arial,sans-serif;font-size:14px">Your ' + y + ' summary is attached and saved in the Drive folder "' + ARCHIVE_FOLDER + '".</div>', attachments: [pdf] }); } catch (e) { log_('Year email failed: ' + e); }
+    try { mail_({ to: alertEmail_(), subject: 'Finance HQ: your ' + y + ' year in review', htmlBody: '<div style="font-family:Arial,sans-serif;font-size:14px">Your ' + y + ' summary is attached and saved in the Drive folder "' + ARCHIVE_FOLDER + '".</div>', attachments: [pdf] }); } catch (e) { log_('Year email failed: ' + e); }
   }
 }
 function yearInReviewNow() {
@@ -3362,7 +3364,7 @@ function refreshAfterPhoneEdit() { liveRebuild_('Transactions'); return true; }
 // account names or store names. Turn it off in Settings: "Share usage check-ins with the Finance HQ creator (Yes/No)".
 // The creator fills CHECKIN below once (run setupTesterTracker in their own copy). Blank = check-ins are off for everyone.
 const CHECKIN = {"url":"https://docs.google.com/forms/d/e/1FAIpQLScXchq1zCkaQV7h3XxZPVmPBdjLkJYV6mmv5V_pirhoTTw-Hw/formResponse","ids":{"tester":"entry.344453892","week":"entry.1595464086","synced":"entry.199959467","accounts":"entry.329170921","newTx":"entry.249597811","appDays":"entry.728590027","sheetDays":"entry.1864243060","catFixes":"entry.166478788","ticks":"entry.2128658648","limitEdits":"entry.558089935","setupDone":"entry.1823756908","savingsGoal":"entry.729450541","yearly":"entry.1270006795","problems":"entry.1275410742","version":"entry.1893017258"}};
-const FHQ_VERSION = '2026.11.22.6';
+const FHQ_VERSION = '2026.11.22.7';
 const CHECKIN_FIELDS = [
   ['tester', 'Tester (Google account)'], ['week', 'Week since install'], ['synced', 'Bank synced in last 2 days'],
   ['accounts', 'Accounts linked'], ['newTx', 'New transactions this week'], ['appDays', 'Days phone app opened (7d)'],
@@ -3410,6 +3412,7 @@ function checkinPayload_() {
     savingsGoal: pctSetting_(S['Savings goal (% of pay)']) > 0 ? 'Yes' : 'No', yearly: loadYearly_().length, problems: problems, version: FHQ_VERSION };
 }
 function checkinIfDue_() {
+  if (isDemo_()) return;
   if (!CHECKIN.url || !Object.keys(CHECKIN.ids || {}).length) return;
   if (!yes_(settings_()['Share usage check-ins with the Finance HQ creator (Yes/No)'])) return;
   const p = PropertiesService.getScriptProperties(), last = Number(p.getProperty('CHECKIN_LAST') || 0);
@@ -3447,6 +3450,7 @@ function showConnect() {
 }
 // Called by the Connect dialog. The token goes into this copy's own script properties and is used once.
 function connectBank(token) {
+  if (isDemo_()) throw new Error('This copy is a demo with sample data. Make a fresh copy of Finance HQ to connect your own bank.');
   token = String(token || '').replace(/\s+/g, '');
   if (!token) throw new Error('Paste your setup token first.');
   let claim = '';
@@ -3585,7 +3589,7 @@ function paydayNudge_() {
     'Left to spend this period: ' + $(left) + ' — about ' + $(Math.max(0, left / daysLeft)) + '/day for ' + daysLeft + ' days' + (bills.amt ? ' (after ' + $(bills.amt) + ' of bills still due)' : '') + '.';
   let sent = false;
   if (yes_(S['Alerts: phone reminders (Yes/No)'])) { try { phoneReminder_(title, new Date(Date.now() + 2 * 60000), body); sent = true; } catch (e) { log_('Payday reminder failed: ' + e); } }
-  if (!sent || yes_(S['Alerts: email (Yes/No)'])) { try { MailApp.sendEmail(alertEmail_(), 'Finance HQ: ' + title.replace(/^💰 /, ''), body); } catch (e) { log_('Payday email failed: ' + e); } }
+  if (!sent || yes_(S['Alerts: email (Yes/No)'])) { try { mail_(alertEmail_(), 'Finance HQ: ' + title.replace(/^💰 /, ''), body); } catch (e) { log_('Payday email failed: ' + e); } }
   log_('Payday nudge: ' + title);
 }
 
@@ -3600,7 +3604,7 @@ function feedbackDue_() {
   [['week1', 7, 'FB1_SENT', 'How\'s week one going? 2 minutes'], ['week4', 28, 'FB4_SENT', 'One month in — 3 quick questions']].forEach(x => {
     if (!FEEDBACK[x[0]] || days < x[1] || P.getProperty(x[2])) return;
     const msg = 'Finance HQ check-in: ' + x[3] + '.\n\nYour answers go to the person who shared Finance HQ with you and help make it better:\n' + FEEDBACK[x[0]] + '\n\n(Also in the menu: Finance HQ → Send feedback.)';
-    try { MailApp.sendEmail(alertEmail_(), 'Finance HQ: ' + x[3], msg); } catch (e) {}
+    try { mail_(alertEmail_(), 'Finance HQ: ' + x[3], msg); } catch (e) {}
     try { if (yes_(settings_()['Alerts: phone reminders (Yes/No)'])) phoneReminder_('📝 Finance HQ: ' + x[3], new Date(Date.now() + 3 * 60000), FEEDBACK[x[0]]); } catch (e) {}
     P.setProperty(x[2], String(Date.now()));
   });
@@ -3686,6 +3690,65 @@ function go(){var b=document.getElementById('go'),m=document.getElementById('msg
   .sendSupport(document.getElementById('m').value,document.getElementById('d').checked);}
 </script></body></html>`;
 
+// ===== PART 15 — Demo mode: a full Finance HQ on made-up data, for showing people =====
+// Finance HQ → See a demo with sample data (before connecting) fills this copy with a pretend person's last 6 months.
+// The pretend bank keeps "syncing" every morning, so the demo always looks current. No emails, reminders or check-ins go out.
+const DEMO_ACCESS = 'demo://finance-hq-sample';
+function isDemo_() { try { return PropertiesService.getScriptProperties().getProperty(SF_ACCESS) === DEMO_ACCESS; } catch (e) { return false; } }
+function mail_() { if (isDemo_()) return; return MailApp.sendEmail.apply(MailApp, arguments); }
+
+function demoBank_(start, end) {
+  const DAY_MS = 864e5, now = new Date(), today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const from = new Date(today.getTime() - 185 * DAY_MS), lo = Math.max(start || 0, from.getTime()), hi = end || (today.getTime() + DAY_MS);
+  const ymd = d => d.getFullYear() * 10000 + (d.getMonth() + 1) * 100 + d.getDate();
+  const rand = key => { let h = 2166136261; for (let i = 0; i < key.length; i++) { h ^= key.charCodeAt(i); h = Math.imul(h, 16777619); } h >>>= 0; return ((h * 9301 + 49297) % 233280) / 233280; };
+  const acc = { chk: [], sav: [], sap: [], amx: [] };
+  const add = (k, d, amt, desc, n) => { const t = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 12); if (t.getTime() < lo || t.getTime() >= hi || t > now) return;
+    acc[k].push({ id: 'DEMO-' + ymd(t) + '-' + k + '-' + (n || 0) + '-' + desc.replace(/\W/g, '').slice(0, 8), posted: Math.floor(t.getTime() / 1000), amount: amt.toFixed(2), description: desc, payee: desc }); };
+  const spend = [['STARBUCKS STORE 1182', 5.5, 9.5, 0.30, 'amx'], ['CHIPOTLE 2291', 11, 16, 0.13, 'amx'], ['UBER EATS', 18, 42, 0.12, 'amx'], ['SWEETGREEN DC', 13, 17, 0.10, 'amx'],
+    ['TRADER JOE S #651', 38, 92, 0.10, 'amx'], ['WHOLE FOODS MKT', 25, 70, 0.04, 'amx'], ['SHELL OIL 5741', 38, 55, 0.10, 'sap'], ['AMAZON.COM*MK2', 14, 85, 0.13, 'sap'],
+    ['TARGET 00023', 22, 75, 0.07, 'sap'], ['LYFT *RIDE', 11, 27, 0.10, 'sap'], ['AMC THEATRES 0451', 16, 32, 0.03, 'sap']];
+  const subs = [['NETFLIX.COM', 15.49, 3], ['SPOTIFY USA', 11.99, 7], ['APPLE.COM/BILL', 2.99, 12], ['PLANET FITNESS', 24.99, 17], ['HULU 877-8244858', 9.99, 22]];
+  const charged = { sap: {}, amx: {} };                                    // per statement month, to pay the card next month
+  for (let d = new Date(from); d <= today; d = new Date(d.getTime() + DAY_MS)) {
+    const key = ymd(d), dom = d.getDate(), mk = d.getFullYear() * 100 + d.getMonth();
+    if (Math.round((d - new Date(2026, 0, 2)) / DAY_MS) % 14 === 0) { add('chk', d, 2150, 'ACME CORP PAYROLL DIRECT DEP'); add('chk', d, -430, 'ONLINE TRANSFER TO SAVINGS 8812', 1); add('sav', d, 430, 'ONLINE TRANSFER FROM CHECKING 4421'); }
+    if (dom === 1) add('chk', d, -1350, 'RENT PAYMENT OAKWOOD APTS');
+    if (dom === 9) add('chk', d, -128.40, 'GEICO AUTO INSURANCE');
+    if (dom === 11) add('chk', d, -65, 'VERIZON WIRELESS PAYMENT');
+    if (dom === 15) add('chk', d, -212, 'NAVIENT STUDENT LOAN PMT');
+    if (dom === 28) add('sav', d, 4.12, 'INTEREST PAID');
+    subs.forEach((x, i) => { if (dom === x[2]) { add('sap', d, -x[1], x[0], 10 + i); charged.sap[mk] = (charged.sap[mk] || 0) + x[1]; } });
+    spend.forEach((x, i) => { if (rand(key + x[0]) < x[3]) { const a = Math.round((x[1] + rand(x[0] + key) * (x[2] - x[1])) * 100) / 100; add(x[4], d, -a, x[0], i); charged[x[4]][mk] = (charged[x[4]][mk] || 0) + a; } });
+    const prev = d.getMonth() === 0 ? (d.getFullYear() - 1) * 100 + 11 : mk - 1;
+    if (dom === 12 && charged.sap[prev]) { const a = Math.round(charged.sap[prev] * 100) / 100; add('chk', d, -a, 'CHASE CREDIT CRD AUTOPAY', 2); add('sap', d, a, 'AUTOMATIC PAYMENT - THANK YOU', 99); }
+    if (dom === 14 && charged.amx[prev]) { const a = Math.round(charged.amx[prev] * 100) / 100; add('chk', d, -a, 'AMERICAN EXPRESS EPAYMENT', 3); add('amx', d, a, 'ONLINE PAYMENT - THANK YOU', 99); }
+  }
+  const owe = k => -(charged[k][today.getFullYear() * 100 + today.getMonth()] || 0);
+  const bd = Math.floor(now.getTime() / 1000);
+  const a = (id, name, org, bal, list) => ({ id: 'ACT-demo-' + id, name: name, org: { name: org }, currency: 'USD', balance: bal.toFixed(2), 'available-balance': bal.toFixed(2), 'balance-date': bd, transactions: list.sort((x, y) => y.posted - x.posted) });
+  return { errors: [], accounts: [a(1, 'Total Checking (4421)', 'Chase Bank', 3240.18, acc.chk), a(2, 'Online Savings (8812)', 'Ally Bank', 8915.40, acc.sav),
+    a(3, 'Sapphire Preferred (1234)', 'Chase Bank', owe('sap'), acc.sap), a(4, 'American Express Gold Card (5678)', 'American Express', owe('amx'), acc.amx),
+    a(5, 'Robinhood individual (0740)', 'Robinhood', 5212.77, []), a(6, 'Student Loan (9911)', 'Navient', -6820, [])] };
+}
+
+// Finance HQ → See a demo with sample data
+function startDemo() {
+  const P = PropertiesService.getScriptProperties();
+  if (P.getProperty(SF_ACCESS) && P.getProperty(SF_ACCESS) !== DEMO_ACCESS) throw new Error('This copy is connected to a real bank. Make a fresh copy of Finance HQ for the demo.');
+  toast_(finSS_(), 'Building the demo — about a minute…', 'Finance HQ', 60);
+  finSS_(); P.setProperty(SF_ACCESS, DEMO_ACCESS);
+  setupFinanceHQ();
+  try { const d = JSON.parse(getSetupData()); (d.cards || []).forEach(c => { if (/sapphire|1234/i.test(c.name + c.account)) { c.close = 19; c.due = 16; } else if (/gold|5678/i.test(c.name + c.account)) { c.close = 20; c.due = 14; } });
+    (d.debts || []).forEach(x => { if (/loan|navient/i.test(x.name)) { x.rate = 5.5; x.pay = 212; } });
+    d.save = 20; saveSetup(JSON.stringify(d)); } catch (e) { log_('Demo setup details skipped: ' + e.message); }
+  setSetting_('Spending month (Auto / Statement / Calendar)', 'Statement');
+  const ss = finSS_(), w = ss.getSheetByName('Welcome'); if (w && ss.getSheets().length > 1) ss.deleteSheet(w);
+  financeMenu_(); PERIOD_ = null; rebuild_(true);
+  toast_(ss, 'Demo ready — every number here is made up.', 'Finance HQ', 8);
+  return 'Demo ready.';
+}
+
 // ===== PART 14 — Updates: one-minute installs =====
 // The creator publishes a release (a code file + a small version file in their Google Drive, readable by link).
 // Each copy checks once a day. When something newer exists it emails you once and adds "⬆ Install update" to the
@@ -3719,7 +3782,7 @@ function checkForUpdate_() {
   const S = settings_();
   const lastMail = Number(P.getProperty('UPDATE_TOLD_AT') || 0);           // at most one update email a week; the menu shows it right away
   if (P.getProperty('UPDATE_TOLD') !== info.version && Date.now() - lastMail > 6 * 864e5 && yes_(S['Update emails (Yes/No)'] === undefined ? 'Yes' : S['Update emails (Yes/No)'])) {
-    try { MailApp.sendEmail(alertEmail_(), 'Finance HQ: update ' + info.version + ' is ready',
+    try { mail_(alertEmail_(), 'Finance HQ: update ' + info.version + ' is ready',
       'A new version of Finance HQ is ready' + (info.notes ? ':\n\n' + info.notes : '.') +
       '\n\nTo install (about a minute): open your Finance HQ sheet → Finance HQ menu → ⬆ Install update, and follow the 3 steps.'); } catch (e) {}
     P.setProperty('UPDATE_TOLD', info.version); P.setProperty('UPDATE_TOLD_AT', String(Date.now()));
