@@ -238,6 +238,8 @@ function snapshot_() {
 
 function sortTransactions_() {
   const sh = sheet_('Transactions');
+  const f = sh.getFilter();                       // a filter left on the tab blocks sorting and hides new rows
+  if (f) { f.remove(); log_('Removed a filter on Transactions so new transactions show up and stay newest-first.'); }
   if (sh.getLastRow() > 2) sh.getRange(2, 1, sh.getLastRow() - 1, TABS.Transactions.length).sort({ column: 1, ascending: false });
 }
 

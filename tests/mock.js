@@ -13,6 +13,7 @@ function makeSheet(name) {
   const sheet = {
     getName: () => name,
     getLastRow: () => { let n = g.length; while (n > 0 && g[n - 1].every(v => v === '' || v == null)) n--; return n; },
+    getFilter: () => null,
     getMaxRows: () => Math.max(g.length, 1000), getMaxColumns: () => 26,
     getRange: (a, b, c, d) => {
       if (typeof a === 'string') return chainRange(1, 1, 1, 1);
