@@ -2367,6 +2367,8 @@ function draw(){
    '<tr><td>Email for alerts and the weekly digest</td><td><input id="email" value="'+esc(D.email)+'"></td></tr>'+
    '<tr><td>Phone reminders (via Google Calendar)</td><td><input type="checkbox" id="phone" '+(D.phone?'checked':'')+'></td></tr>'+
    '<tr><td>Sunday weekly digest email</td><td><input type="checkbox" id="digest" '+(D.digest?'checked':'')+'></td></tr></table>'+
+   '<p class="hint"><b>Make Finance HQ emails stand out.</b> They come from your own Gmail, so Gmail can treat them like mail you sent yourself (no phone ping). '+
+   '<a href="https://mail.google.com/mail/u/0/#search/subject%3A%22Finance+HQ%22" target="_blank">Open them in Gmail</a>, click the filter icon at the right of the search bar, then <b>Create filter</b> and tick <b>Star it</b>, <b>Always mark it as important</b> and <b>Never send it to Spam</b>.</p>'+
    '<p class="hint">Other category limits are suggested from your own spending — adjust them later in Settings if you like.</p>'+
    '<p class="hint">Weekly check-ins send the person who shared Finance HQ a few usage counts (never amounts or account details). Menu → What check-ins share · turn off in Settings.</p>';
   h+='<h3>4 · Debts</h3><p class="hint">Student loans, car loan, mortgage, personal loans… Rows marked found were spotted in your accounts — just add the balance and rate. Leave balance empty to skip a row.</p>';
@@ -3472,7 +3474,7 @@ function refreshAfterPhoneEdit() { liveRebuild_('Transactions'); return true; }
 // account names or store names. Turn it off in Settings: "Share usage check-ins with the Finance HQ creator (Yes/No)".
 // The creator fills CHECKIN below once (run setupTesterTracker in their own copy). Blank = check-ins are off for everyone.
 const CHECKIN = {"url":"https://docs.google.com/forms/d/e/1FAIpQLScXchq1zCkaQV7h3XxZPVmPBdjLkJYV6mmv5V_pirhoTTw-Hw/formResponse","ids":{"tester":"entry.344453892","week":"entry.1595464086","synced":"entry.199959467","accounts":"entry.329170921","newTx":"entry.249597811","appDays":"entry.728590027","sheetDays":"entry.1864243060","catFixes":"entry.166478788","ticks":"entry.2128658648","limitEdits":"entry.558089935","setupDone":"entry.1823756908","savingsGoal":"entry.729450541","yearly":"entry.1270006795","problems":"entry.1275410742","version":"entry.1893017258"}};
-const FHQ_VERSION = '2026.11.22.9';
+const FHQ_VERSION = '2026.11.24.1';
 const CHECKIN_FIELDS = [
   ['tester', 'Tester (Google account)'], ['week', 'Week since install'], ['synced', 'Bank synced in last 2 days'],
   ['accounts', 'Accounts linked'], ['newTx', 'New transactions this week'], ['appDays', 'Days phone app opened (7d)'],
@@ -3804,7 +3806,13 @@ function go(){var b=document.getElementById('go'),m=document.getElementById('msg
 // The pretend bank keeps "syncing" every morning, so the demo always looks current. No emails, reminders or check-ins go out.
 const DEMO_ACCESS = 'demo://finance-hq-sample';
 function isDemo_() { try { return PropertiesService.getScriptProperties().getProperty(SF_ACCESS) === DEMO_ACCESS; } catch (e) { return false; } }
-function mail_() { if (isDemo_()) return; return MailApp.sendEmail.apply(MailApp, arguments); }
+// Every Finance HQ email shows "Finance HQ" as the sender name, so it stands out from mail you sent yourself.
+function mail_(a, subject, body, opts) {
+  if (isDemo_()) return;
+  const m = typeof a === 'object' ? Object.assign({}, a) : Object.assign({ to: a, subject: subject, body: body }, opts || {});
+  if (!m.name) m.name = 'Finance HQ';
+  return MailApp.sendEmail(m);
+}
 
 function demoBank_(start, end) {
   const DAY_MS = 864e5, now = new Date(), today = new Date(now.getFullYear(), now.getMonth(), now.getDate());

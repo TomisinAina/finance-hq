@@ -99,12 +99,12 @@ check('capped at 5 a day', /5 messages today/.test(capped));
 
 console.log('\n10 · Two releases in one week');
 { const bump = v => NEW.replace("const FHQ_VERSION = '" + ver(NEW) + "'", "const FHQ_VERSION = '" + v + "'");
-  drive[VFILE] = JSON.stringify({ version: '2026.11.23.1', notes: 'small fix', code: CFILE }); drive[CFILE] = bump('2026.11.23.1');
+  drive[VFILE] = JSON.stringify({ version: '2099.01.01.1', notes: 'small fix', code: CFILE }); drive[CFILE] = bump('2099.01.01.1');
   P().UPDATE_TOLD_AT = String(Date.now() - 2 * 864e5);   // the new version emailed 2 days ago
   const n0 = mails.filter(m => /update/i.test(m.subject)).length; B.checkForUpdate_();
-  console.log('DBG', mails.filter(m => /update/i.test(m.subject)).length, n0, B.updateLabel_(), PropertiesService.getScriptProperties().getProperty('UPDATE_TOLD_AT'), PropertiesService.getScriptProperties().getProperty('UPDATE_TOLD')); check('no second email within a week, menu still offers it', mails.filter(m => /update/i.test(m.subject)).length === n0 && /2026\.11\.23\.1/.test(B.updateLabel_()));
+  console.log('DBG', mails.filter(m => /update/i.test(m.subject)).length, n0, B.updateLabel_(), PropertiesService.getScriptProperties().getProperty('UPDATE_TOLD_AT'), PropertiesService.getScriptProperties().getProperty('UPDATE_TOLD')); check('no second email within a week, menu still offers it', mails.filter(m => /update/i.test(m.subject)).length === n0 && /2099\.01\.01\.1/.test(B.updateLabel_()));
   P().UPDATE_TOLD_AT = String(Date.now() - 7 * 864e5); B.checkForUpdate_();
-  check('a week later the newest one is emailed', mails.filter(m => /update/i.test(m.subject)).length === n0 + 1 && /2026\.11\.23\.1/.test(mails[mails.length - 1].subject)); }
+  check('a week later the newest one is emailed', mails.filter(m => /update/i.test(m.subject)).length === n0 + 1 && /2099\.01\.01\.1/.test(mails[mails.length - 1].subject)); }
 
 console.log('\n11 · A friend with update emails turned off');
 B.setSetting_ ? 0 : 0;
